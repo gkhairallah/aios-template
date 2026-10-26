@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# TEMPLATE — copy this to reconcile-attachments.sh (drop the .example) and
+# fill in the CONFIG block below. The real file is gitignored (.aios/*.sh).
+# Setup walkthrough: docs/AIOS_SECURED_ATTACHMENTS_RUNBOOK.md
+#
+# Delete R2 objects no longer referenced anywhere in the vault. Dry run by
+# default — run it plain a few times first and eyeball the "Orphans" list
+# before ever passing --delete. Good candidate for a weekly cron job once
+# you trust it (see the runbook for a sample crontab line).
+#
+# Usage: ./reconcile-attachments.sh [--delete]
+set -euo pipefail
+
+# GUI automations (Automator/Alfred/Shortcuts) run with a bare PATH that skips
+# Homebrew's bin dirs, so `rclone` isn't found even though it works in Terminal.
+export PATH="/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:$PATH"
+
+# ─── CONFIG — fill in your own values ──────────────────────────────────────
+VAULT="$HOME/REPOS/<your-vault-folder-name>"
+REMOTE="<your-rclone-remote>"
+BUCKET="<your-bucket-name>"
+BASE="https://cdn.<yourdomain>.com"
+# ────────────────────────────────────────────────────────────────────────────
+
+referenced=$(grep -rhoE "${BASE}/[^)\"' ?]+" "$VAULT" --include='*.md' | sed "s#${BASE}/##" | sort -u)
+present=$(rclone lsf "${REMOTE}:${BUCKET}" -R --files-only | sort -u)
+orphans=$(comm -23 <(echo "$present") <(echo "$referenced") || true)
+if [ -z "${orphans// }" ]; then echo "No orphans."; exit 0; fi
+echo "Orphans:"; echo "$orphans"
+if [ "${1:-}" = "--delete" ]; then
+  echo "$orphans" | while read -r k; do [ -n "$k" ] && rclone deletefile "${REMOTE}:${BUCKET}/${k}" && echo "deleted $k"; done
+else echo "(dry run — re-run with --delete)"; fi

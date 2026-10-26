@@ -1,0 +1,42 @@
+# Obsidian per-machine UI state (churns constantly — do not sync)
+# The rest of .obsidian/ is meant to be TRACKED: plugins + their settings then clone to
+# every new machine, so machine #2 installs nothing by hand (D15).
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/cache
+# graph.json mixes settled config (filter, colorGroups) with per-session UI state
+# (`scale` = zoom, `close` = panel open) that every machine rewrites. Ship a
+# graph.json.example seed instead and copy it into place per machine. See D15.
+.obsidian/graph.json
+.trash/
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Secrets — never commit
+.env
+*.env
+.env.*
+secrets/
+*.key
+*.pem
+
+# Private subtree — LOCAL ONLY, never pushed to GitHub
+Private/*
+!Private/README.md
+
+# Large media — uncomment if you offload binaries to R2/LFS instead of committing
+# attachments/**/*.mp4
+# attachments/**/*.mov
+# attachments/**/*.zip
+
+# Accidental empty canvases created from the Canvas ribbon
+Untitled*.canvas
+
+# AIOS per-machine config + scripts (machine-specific; no secrets — keep the .example, ignore the real one)
+# config.json holds an ABSOLUTE vault path, which differs per machine (usernames differ) —
+# committing it makes every other machine resolve a path that does not exist, silently.
+.aios/attachments.json
+.aios/config.json
+.aios/*.sh

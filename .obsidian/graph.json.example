@@ -1,0 +1,35 @@
+{
+  "collapse-filter": false,
+  "search": "-Path: Templates",
+  "showTags": false,
+  "showAttachments": false,
+  "hideUnresolved": true,
+  "showOrphans": true,
+  "collapse-color-groups": false,
+  "colorGroups": [
+    {
+      "query": "[entity:example-business-one]",
+      "color": { "a": 1, "rgb": 14048348 }
+    },
+    {
+      "query": "[entity:example-business-two]",
+      "color": { "a": 1, "rgb": 14069084 }
+    },
+    {
+      "query": "[entity:example-business-three]",
+      "color": { "a": 1, "rgb": 11392604 }
+    }
+  ],
+  "collapse-display": false,
+  "showArrow": true,
+  "textFadeMultiplier": 0.2,
+  "nodeSizeMultiplier": 1,
+  "lineSizeMultiplier": 2.3,
+  "collapse-forces": false,
+  "centerStrength": 0.5187132489703125,
+  "repelStrength": 8.756076388888889,
+  "linkStrength": 0.6611979166666667,
+  "linkDistance": 198,
+  "scale": 1,
+  "close": true
+}

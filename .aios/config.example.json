@@ -1,0 +1,5 @@
+{
+  "_comment": "SHAPE REFERENCE ONLY — do not fill this copy in. The real per-machine vault pointer lives OUTSIDE the vault at ~/.aios/config.json, and the aios-notes one-time init command writes it for you. It is kept outside the vault deliberately: it holds an absolute path that differs on every machine (usernames differ), so it must never travel with the repo. A stray .aios/config.json inside the vault is gitignored as a safety net — if one exists, it is stale and the pointer at ~/.aios/config.json wins.",
+  "vaultPath": "/ABSOLUTE/PATH/TO/YOUR/VAULT",
+  "vaultName": "YourVault"
+}

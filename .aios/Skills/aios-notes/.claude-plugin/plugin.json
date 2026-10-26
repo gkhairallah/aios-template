@@ -1,0 +1,26 @@
+{
+  "name": "aios-notes",
+  "version": "0.15.2",
+  "description": "Capture, maintain, and query an AIOS/Obsidian vault with an LLM — create notes, manage the daily log and note lifecycle, link and build MOCs, run weekly reviews and monthly audits, answer questions, gather context capability-first from connected sources (docs, email, calendar, chat, records, incl. via a tool gateway), take approved actions in those systems, and stand up live, auto-syncing Claude Artifact project dashboards — all per the vault's Filing Rules and Conventions.",
+  "author": {
+    "name": "George Khairallah"
+  },
+  "keywords": [
+    "obsidian",
+    "aios",
+    "notes",
+    "knowledge-management",
+    "para",
+    "ace",
+    "daily-notes",
+    "vault-audit",
+    "composio",
+    "coda",
+    "connectors",
+    "dashboard",
+    "live-sync",
+    "cowork-artifact",
+    "day-wrap",
+    "end-of-day"
+  ]
+}

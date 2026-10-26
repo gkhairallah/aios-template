@@ -1,0 +1,14 @@
+# Normalize line endings across machines (macOS / Windows / Linux)
+* text=auto eol=lf
+*.md   text
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.svg  text
+*.pdf  binary
+
+# If you adopt Git LFS for media, uncomment:
+# *.pdf filter=lfs diff=lfs merge=lfs -text
+# *.mp4 filter=lfs diff=lfs merge=lfs -text
+# *.mov filter=lfs diff=lfs merge=lfs -text

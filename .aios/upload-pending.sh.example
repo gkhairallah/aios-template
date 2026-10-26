@@ -1,0 +1,200 @@
+#!/usr/bin/env bash
+# TEMPLATE — copy this to upload-pending.sh (drop the .example) and fill in the
+# CONFIG block below with your own values. The real upload-pending.sh is
+# gitignored (.aios/*.sh) once you create it, since it will contain your
+# vault path, bucket name, and domain — nothing secret, but instance-specific.
+# Setup walkthrough: docs/AIOS_SECURED_ATTACHMENTS_RUNBOOK.md
+#
+# Upload every file staged in Private/attachments/_pending/ to your object
+# storage, sign its URL, and rewrite the PENDING:_pending/<file> placeholder
+# in whichever note(s) reference it.
+#
+# Why this exists: an agent session running in a cloud sandbox has no local
+# rclone binary and no signing-secret env var. It stages files here instead of
+# uploading directly. Run this script on a machine that DOES have rclone + the
+# secret to finish the job — manually, or auto-triggered by a Folder Action (or
+# equivalent) watching _pending/ (GUI automations like Automator/Alfred/
+# Shortcuts don't source your shell profile, so the secret is read from
+# ~/.aios/secrets.env below instead).
+#
+# Usage: ./upload-pending.sh
+set -euo pipefail
+
+# ─── CONFIG — fill in your own values ──────────────────────────────────────
+VAULT="$HOME/REPOS/<your-vault-folder-name>"
+REMOTE="<your-rclone-remote>"          # name you gave it in `rclone config create`
+BUCKET="<your-bucket-name>"
+BASE="https://cdn.<yourdomain>.com"    # the custom domain in front of your Worker
+# ────────────────────────────────────────────────────────────────────────────
+
+# GUI automations (Automator/Alfred/Shortcuts) run with a bare PATH that skips
+# Homebrew's bin dirs, so `rclone` isn't found even though it works in Terminal.
+export PATH="/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:$PATH"
+
+SECRETS_FILE="$HOME/.aios/secrets.env"
+if [ -z "${AIOS_R2_SIGN_SECRET:-}" ] && [ -f "$SECRETS_FILE" ]; then
+  # shellcheck disable=SC1090
+  source "$SECRETS_FILE"
+fi
+: "${AIOS_R2_SIGN_SECRET:?set AIOS_R2_SIGN_SECRET, or put it in $SECRETS_FILE as: export AIOS_R2_SIGN_SECRET=...}"
+
+PENDING="$VAULT/Private/attachments/_pending"
+ARCHIVE="$VAULT/Private/attachments/_uploaded"
+
+# Prevent overlapping runs if a Folder Action fires more than once for a single drop.
+LOCK="/tmp/.aios-upload-pending.lock"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  echo "Another run is already in progress — exiting."
+  exit 0
+fi
+trap 'rmdir "$LOCK"' EXIT
+
+mkdir -p "$PENDING" "$ARCHIVE"
+shopt -s nullglob
+
+# Debounce: give a slow copy/drag a moment to finish landing before we read the folder.
+sleep 2
+files=("$PENDING"/*)
+
+if [ ${#files[@]} -eq 0 ]; then
+  echo "Nothing pending in $PENDING."
+  exit 0
+fi
+
+for f in "${files[@]}"; do
+  fname=$(basename "$f")
+
+  # Sanitize the filename for the storage key: spaces/specials -> hyphens, keep
+  # the extension. This keeps the signed URL encoding-free (so it renders as a
+  # valid link in Obsidian AND stays parseable by resign/reconcile/delete, which
+  # read keys straight out of the URL). The ORIGINAL fname is still used to
+  # match the placeholder in the note and as the human-readable link label.
+  safe=$(python3 - "$fname" <<'PY'
+import os, re, sys
+b, e = os.path.splitext(sys.argv[1])
+b = re.sub(r"[^A-Za-z0-9._-]+", "-", b).strip("-") or "file"
+print(b + e.lower())
+PY
+)
+  key="attachments/$(date +%Y)/$(date +%m)/${safe}"
+
+  echo "Uploading ${fname} -> ${REMOTE}:${BUCKET}/${key}"
+  # --header-upload sets the object's metadata directly. Without this, objects
+  # have no Content-Disposition at all, and some browsers/Workers default that
+  # to a forced download regardless of Content-Type. Setting it explicitly to
+  # inline here is the belt; the Worker at $BASE passing
+  # httpMetadata.contentDisposition through untouched (not hardcoding
+  # "attachment") is the suspenders — see docs/AIOS_SECURED_ATTACHMENTS_RUNBOOK.md
+  # if links still force-download after this.
+  rclone copyto "$f" "${REMOTE}:${BUCKET}/${key}" --header-upload "Content-Disposition: inline"
+
+  python3 - "$VAULT" "$BASE" "$key" "$fname" <<'PY'
+import sys, os, re, hmac, hashlib, glob, time
+from urllib.parse import quote
+
+vault, base, key, fname = sys.argv[1:5]
+sec = os.environ["AIOS_R2_SIGN_SECRET"].encode()
+sig = hmac.new(sec, key.encode(), hashlib.sha256).hexdigest()
+url = f"{base}/{key}?sig={sig}"
+
+# The script — not the upstream note editor — owns the final render syntax, so a
+# broken .docx image-embed is structurally impossible. Per 30 Atlas/Conventions.md
+# § Attachments: images get a plain embed; txt (browsers render this natively)
+# gets a collapsed-callout iframe straight at the signed URL; pdf does NOT get an
+# iframe — Obsidian's Electron shell can't render PDFs in one at all (confirmed
+# Electron bug, not fixable via headers) — it gets a collapsed-callout using the
+# `external-pdf` community plugin's code-block syntax instead; office formats
+# (browsers can't render these at all) get a collapsed-callout iframe pointed at
+# Office Online's viewer instead; everything else (csv, unknowns) gets a plain
+# link — csv is deliberately NOT embedded, Chrome/Firefox force-download csv
+# even with correct headers set. Full doctrine: docs/AIOS_LLD.md §7.
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".avif"}
+IFRAME_DIRECT_EXTS = {".txt"}
+PDF_EXTS = {".pdf"}
+OFFICE_EXTS = {".docx", ".xlsx", ".pptx"}
+ext = os.path.splitext(fname)[1].lower()
+
+# Two spacing rules matter here, both learned the hard way from a real broken
+# render with 2+ attachments in one note:
+# 1. A bare `>` line must separate the <iframe> from the download link WITHIN a
+#    callout. Without it, CommonMark treats <iframe> as an HTML block that keeps
+#    consuming every following line until a blank line — so the download link
+#    (and anything after it) gets swallowed as literal HTML text instead of
+#    being parsed as a markdown link.
+# 2. A genuinely blank line (no `>` at all) must separate ONE callout from the
+#    NEXT. Without it, consecutive `>`-prefixed lines merge into a single
+#    blockquote, so a second attachment's `[!doc]-` header renders as literal
+#    text inside the first attachment's callout instead of starting its own.
+# The leading "\n" on `final` provides rule 2 unconditionally, regardless of
+# what already precedes the placeholder text in the note.
+download_line = f"> [⬇ Download original]({url}&dl=1)"
+
+if ext in IMAGE_EXTS:
+    final = f"![{fname}]({url})"
+elif ext in IFRAME_DIRECT_EXTS:
+    final = f'\n> [!doc]- 📎 {fname}\n> <iframe src="{url}" width="100%" height="600"></iframe>\n>\n{download_line}'
+elif ext in PDF_EXTS:
+    # NOT an iframe: Obsidian's Electron shell has a confirmed, long-standing bug
+    # where <iframe> can't render PDFs at all (blank frame) — not fixable via
+    # headers/CORS/the Worker. Uses the `external-pdf` community plugin instead,
+    # which renders through Obsidian's own bundled PDF viewer. See
+    # 30 Atlas/Conventions.md § 📎 Attachments for the install note (BRAT).
+    final = (
+        f'\n> [!doc]- 📎 {fname}\n'
+        f'> ```external-pdf\n'
+        f'> {url}\n'
+        f'> title: {fname}\n'
+        f'> height: 600px\n'
+        f'> ```\n'
+        f'>\n{download_line}'
+    )
+elif ext in OFFICE_EXTS:
+    viewer = f"https://view.officeapps.live.com/op/embed.aspx?src={quote(url, safe='')}"
+    final = f'\n> [!doc]- 📎 {fname}\n> <iframe src="{viewer}" width="100%" height="600"></iframe>\n>\n{download_line}'
+else:
+    final = f"[{fname}]({url})"
+
+Fesc = re.escape(fname)
+# Match the placeholder in ANY form the upstream session might have written it,
+# broadest wrapper first so a bare-token pass can't double-fire on an already
+# rewritten spot. All collapse to the single correct `final` markdown.
+patterns = [
+    r"!?\[[^\]]*\]\(\s*PENDING:_pending/" + Fesc + r"\s*\)",  # [x](PENDING:..) / ![x](PENDING:..)
+    r"!?\[\[\s*_pending/" + Fesc + r"\s*\]\]",                # [[_pending/F]] / ![[_pending/F]]
+    r"!?\[\[\s*" + Fesc + r"\s*\]\]",                         # [[F]] / ![[F]]
+    r"PENDING:_pending/" + Fesc,                              # bare token
+]
+
+def try_once():
+    hits = 0
+    for path in glob.glob(os.path.join(vault, "**", "*.md"), recursive=True):
+        with open(path, encoding="utf-8", errors="ignore") as fh:
+            text = fh.read()
+        new = text
+        for pat in patterns:
+            new = re.sub(pat, lambda _m: final, new)
+        if new != text:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(new)
+            hits += 1
+            print(f"  linked in: {path}")
+    return hits
+
+# The note reference can land a beat after the file itself (staging the file and
+# editing the note are two separate steps upstream), so don't give up on one pass —
+# retry for up to ~60s before concluding no note references this file.
+hits = try_once()
+attempts = 1
+while hits == 0 and attempts < 20:
+    time.sleep(3)
+    hits = try_once()
+    attempts += 1
+
+if hits == 0:
+    print(f"  (no note referenced PENDING:_pending/{fname} after {attempts} tries over ~{attempts * 3}s — link it manually: {final})")
+PY
+
+  mv "$f" "$ARCHIVE/$safe"
+done
+
+echo "Done. Review with 'git diff' in $VAULT, then commit and push."

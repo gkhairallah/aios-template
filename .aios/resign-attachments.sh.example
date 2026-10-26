@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# TEMPLATE — copy this to resign-attachments.sh (drop the .example) and fill in
+# the CONFIG block below. The real file is gitignored (.aios/*.sh).
+# Setup walkthrough: docs/AIOS_SECURED_ATTACHMENTS_RUNBOOK.md
+#
+# Re-sign every attachment URL in the vault with the CURRENT AIOS_R2_SIGN_SECRET.
+# Run this once, right after rotating the signing secret — rotation instantly
+# invalidates every previously-issued signature, so every note needs its `?sig=`
+# recomputed against the new value or every embedded attachment 403s. Commit
+# the vault afterwards (this only rewrites `?sig=`, not the file paths/keys).
+set -euo pipefail
+
+# ─── CONFIG — fill in your own values ──────────────────────────────────────
+VAULT="$HOME/REPOS/<your-vault-folder-name>"
+BASE="https://cdn.<yourdomain>.com"
+# ────────────────────────────────────────────────────────────────────────────
+
+# GUI automations (Automator/Alfred/Shortcuts) don't source your shell profile,
+# so pull the secret from the same local file upload-pending.sh uses if it's
+# not already set in this environment.
+SECRETS_FILE="$HOME/.aios/secrets.env"
+if [ -z "${AIOS_R2_SIGN_SECRET:-}" ] && [ -f "$SECRETS_FILE" ]; then
+  # shellcheck disable=SC1090
+  source "$SECRETS_FILE"
+fi
+: "${AIOS_R2_SIGN_SECRET:?set AIOS_R2_SIGN_SECRET, or put it in $SECRETS_FILE as: export AIOS_R2_SIGN_SECRET=...}"
+
+grep -rlE "${BASE}/[^)\"' ?]+\?sig=" "$VAULT" --include='*.md' | while read -r f; do
+  python3 - "$f" "$BASE" <<'PY'
+import re, sys, os, hmac, hashlib
+f, base = sys.argv[1], sys.argv[2]
+sec = os.environ["AIOS_R2_SIGN_SECRET"].encode()
+s = open(f).read()
+def repl(m):
+    key = m.group(1)
+    sig = hmac.new(sec, key.encode(), hashlib.sha256).hexdigest()
+    return f"{base}/{key}?sig={sig}"
+s = re.sub(re.escape(base) + r"/([^)\"'?\s]+)\?sig=[0-9a-f]+", repl, s)
+open(f, "w").write(s)
+PY
+done
+echo "Re-signed all attachment URLs with the current secret. Now: git add/commit/push the vault."

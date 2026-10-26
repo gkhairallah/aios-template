@@ -1,0 +1,5 @@
+{
+  "template": "Templates/Daily Note.md",
+  "folder": "00 Calendar",
+  "format": "YYYY/MM/YYYY-MM-DD"
+}

@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# TEMPLATE — copy this to delete-pending.sh (drop the .example) and fill in
+# the CONFIG block below. The real file is gitignored (.aios/*.sh).
+# Setup walkthrough: docs/AIOS_SECURED_ATTACHMENTS_RUNBOOK.md
+#
+# Delete R2 objects requested via Private/attachments/_pending_delete/*.delete
+#
+# Each *.delete file's content is the R2 key to remove (e.g.
+# attachments/2026/07/file.pdf) — nothing more. An agent session (which has no
+# rclone or signing secret) can compute that key on its own by stripping the
+# workerBaseUrl prefix and "?sig=..." suffix off an existing signed URL already
+# sitting in a note — no credentials needed to do that part. The agent's job is
+# to (1) remove the attachment reference from the note itself and (2) write the
+# *.delete request file. This script's only job is the part that actually needs
+# rclone: deleting the R2 object.
+#
+# Usage: ./delete-pending.sh
+set -euo pipefail
+
+export PATH="/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:$PATH"
+
+# ─── CONFIG — fill in your own values ──────────────────────────────────────
+VAULT="$HOME/REPOS/<your-vault-folder-name>"
+REMOTE="<your-rclone-remote>"
+BUCKET="<your-bucket-name>"
+BASE="https://cdn.<yourdomain>.com"
+# ────────────────────────────────────────────────────────────────────────────
+
+QUEUE="$VAULT/Private/attachments/_pending_delete"
+ARCHIVE="$VAULT/Private/attachments/_deleted"
+
+LOCK="/tmp/.aios-delete-pending.lock"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  echo "Another run is already in progress — exiting."
+  exit 0
+fi
+trap 'rmdir "$LOCK"' EXIT
+
+mkdir -p "$QUEUE" "$ARCHIVE"
+shopt -s nullglob
+
+# Debounce, same reasoning as upload-pending.sh.
+sleep 2
+reqs=("$QUEUE"/*.delete)
+
+if [ ${#reqs[@]} -eq 0 ]; then
+  echo "Nothing queued for deletion in $QUEUE."
+  exit 0
+fi
+
+for r in "${reqs[@]}"; do
+  raw=$(tr -d '\n' < "$r")
+  # Be tolerant of what got written: accept a bare key OR a full signed URL
+  # pasted by mistake. Strip the workerBaseUrl prefix and any ?sig=... query so
+  # we always target the real R2 key (same "script owns correctness" approach as
+  # upload-pending.sh) — otherwise a wrong key silently no-ops and orphans the object.
+  key="${raw#"$BASE"/}"          # drop base URL prefix if present
+  key="${key%%\?*}"             # drop ?sig=... (or any query) if present
+  key="${key#/}"               # drop a stray leading slash
+  key="$(printf '%s' "$key" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+  if [ -z "$key" ]; then
+    echo "Skipping empty request: $r"
+    mv "$r" "$ARCHIVE/$(basename "$r")"
+    continue
+  fi
+  echo "Deleting ${REMOTE}:${BUCKET}/${key}"
+  if rclone deletefile "${REMOTE}:${BUCKET}/${key}"; then
+    echo "  deleted."
+  else
+    echo "  rclone reported an error (object may already be gone) — check manually if needed."
+  fi
+  mv "$r" "$ARCHIVE/$(basename "$r")"
+done
+
+echo "Done."
